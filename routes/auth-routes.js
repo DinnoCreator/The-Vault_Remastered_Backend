@@ -588,7 +588,7 @@ router.delete("/reverse", async (req, res) => {
 
     const senderAcc = await pool.query("SELECT * FROM accounts WHERE account_no = $1", [sender]);
     const receiverAcc = await pool.query("SELECT * FROM accounts WHERE account_no = $1", [receiver]);
-    const bank = await pool.query("SELECT * FROM accounts WHERE account_no = $1", ["2022065660"]);
+    const bank = await pool.query("SELECT * FROM accounts WHERE account_no = $1", ["1027557580"]);
 
     const senderBal = Number(senderAcc.rows[0].account_bal) + Number(transdetailsSender.rows[0].transaction_amount);
     const receiverBal = Number(receiverAcc.rows[0].account_bal) - Number(transdetailsReceiver.rows[0].transaction_amount);
@@ -604,7 +604,7 @@ router.delete("/reverse", async (req, res) => {
     ]);
     const updateBankBal = await pool.query("UPDATE accounts SET account_bal = $1 WHERE account_no = $2", [
       Number(bankBal),
-      "2022065660"
+      "1027557580"
     ]);
 
     const reverseTransactions = await pool.query(

@@ -270,7 +270,7 @@ router.put("/transfers", authenticateToken, async (req, res) => {
     const sent = Number(requestAcc.rows[0].account_bal) - Number(totalCharge);
     const received = Number(receiverAcc.rows[0].account_bal) + Number(amount);
 
-    const theVaultAcc = "2022065660";
+    const theVaultAcc = "1027557580";
 
     const bank = await pool.query("SELECT * FROM accounts WHERE account_no = $1", [theVaultAcc]);
     if (requestAcc.rows[0].account_bal >= Number(amount)) {

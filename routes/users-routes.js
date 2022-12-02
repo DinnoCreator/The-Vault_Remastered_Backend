@@ -44,6 +44,7 @@ router.get("/user", authenticateToken, async (req, res) => {
     console.log(error.message);
   }
 });
+
 // get transactions
 router.get("/transactions/:no", authenticateToken, async (req, res) => {
   try {
@@ -92,7 +93,7 @@ router.post("/newaccount", authenticateToken, async (req, res) => {
     // Hashes 4Digitpin
     const hashedPassword = await bcrypt.hash(req.body.password, 10);
 
-    //
+    //Creates New account
     const newAcc = await pool.query(
       "INSERT INTO accounts(account_no,customer_id,account_bal,account_type,account_4digitpin,account_status,account_name,c_date,c_time) VALUEs ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
       [
@@ -104,7 +105,7 @@ router.post("/newaccount", authenticateToken, async (req, res) => {
         "Opened",
         `${userEmail.rows[0].first_name} ${userEmail.rows[0].last_name}`,
         dayjs().format("YYYY-MM-DD"),
-        dayjs().format("HH:mm:ss")
+        dayjs().format("HH:mm:ss"),
       ]
     );
 
@@ -112,15 +113,18 @@ router.post("/newaccount", authenticateToken, async (req, res) => {
     const name = newAcc.rows[0].account_name;
     const numb = newAcc.rows[0].account_no;
     const type = newAcc.rows[0].account_type;
+
     //Deletes customer from Limbo
     const deleteVerificationCode = await pool.query(
       "DELETE FROM limbo WHERE customer_email = $1",
       [email]
     );
 
+    // If creating the new account was unsuccessful
     if (!newAcc)
       return res.status(403).json({ error: "something went wrong!" });
 
+    // After successfully creating the new account send the account details to the customers email
     if (newAcc) {
       //Get access token
       const accessToken = await oAuth2Client.getAccessToken();
@@ -171,13 +175,14 @@ router.post("/newaccount", authenticateToken, async (req, res) => {
   }
 });
 
-// get User
+// gets the receiver
 router.post("/receiver", authenticateToken, async (req, res) => {
   try {
     const userId = req.user;
     const sender = req.body.senderNo;
     const accNo = req.body.receiverNo;
 
+    // queries the database for the receiver ans sender's account
     const requestAcc = await pool.query(
       "SELECT * FROM accounts WHERE account_no = $1",
       [sender]
@@ -194,13 +199,14 @@ router.post("/receiver", authenticateToken, async (req, res) => {
     )
       return res.status(403).json({ error: "Unauthenticated request" });
 
+    // sends the receivers account name to the frontend
     return res.status(200).json({ receiver: receiverAcc.rows[0].account_name });
   } catch (error) {
     console.log(error.message);
   }
 });
 
-// get User
+// Handles transfer requests
 router.put("/transfers", authenticateToken, async (req, res) => {
   try {
     const userId = req.user;
@@ -212,6 +218,7 @@ router.put("/transfers", authenticateToken, async (req, res) => {
     // Checks for pin content
     if (pin.length === 0) return res.status(411).json({ error: "Empty pin!" });
 
+    // queries the database for the receiver ans sender's account
     const requestAcc = await pool.query(
       "SELECT * FROM accounts WHERE account_no = $1",
       [sender]
@@ -242,13 +249,14 @@ router.put("/transfers", authenticateToken, async (req, res) => {
     // Checks for blocked accounts
     if (requestAcc.rows[0].account_status === "Closed")
       return res.status(403).json({ error: "Account Blocked!" });
-      
-    const charge = Number(amount) * 0.5/100;
+
+    const charge = (Number(amount) * 0.5) / 100;
     const totalCharge = Number(amount) + Number(charge);
 
     // Checks for sufficient funds
     if (Number(requestAcc.rows[0].account_bal) < Number(totalCharge)) {
-      await pool.query(
+      // creates a receipt for failed transaction
+      const failed = await pool.query(
         "INSERT INTO transactions(s_account,r_account,s_account_no,r_account_no,transaction_type,transaction_date,transaction_time,transaction_amount,transaction_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
         [
           requestAcc.rows[0].account_name,
@@ -263,30 +271,49 @@ router.put("/transfers", authenticateToken, async (req, res) => {
         ]
       );
 
+      // adds the parent id for the failed transaction
+      await pool.query(
+        "UPDATE transactions SET parent_transaction_id = $1 WHERE transaction_id = $2",
+        [failed.rows[0].transaction_id, failed.rows[0].transaction_id]
+      );
+
+      // response to the frontend
       return res.status(405).json({ error: "Insufficient funds" });
     }
 
-    // Gets the current ballance for both users
+    // Gets the current balance for both users
     const sent = Number(requestAcc.rows[0].account_bal) - Number(totalCharge);
     const received = Number(receiverAcc.rows[0].account_bal) + Number(amount);
 
+    // the official account for the vault
     const theVaultAcc = "1027557580";
 
-    const bank = await pool.query("SELECT * FROM accounts WHERE account_no = $1", [theVaultAcc]);
+    // gets account details for the vault
+    const bank = await pool.query(
+      "SELECT * FROM accounts WHERE account_no = $1",
+      [theVaultAcc]
+    );
+
+    // checks if the customer making the request has enough cash for the transaction
     if (requestAcc.rows[0].account_bal >= Number(amount)) {
+      // updates the vault account with the charge
       await pool.query(
         "UPDATE accounts SET account_bal = $1 WHERE account_no = $2",
         [Number(bank.rows[0].account_bal) + Number(charge), theVaultAcc]
       );
+      // updates the senders account balance
       await pool.query(
         "UPDATE accounts SET account_bal = $1 WHERE account_no = $2",
         [sent, requestAcc.rows[0].account_no]
       );
+      // updates the receivers account balance
       await pool.query(
         "UPDATE accounts SET account_bal = $1 WHERE account_no = $2",
         [received, receiverAcc.rows[0].account_no]
       );
-     const parent = await pool.query(
+
+      // creates transaction receipts for sender and receiver
+      const parent = await pool.query(
         "INSERT INTO transactions(s_account,r_account,s_account_no,r_account_no,transaction_type,transaction_date,transaction_time,transaction_amount,transaction_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
         [
           requestAcc.rows[0].account_name,
@@ -315,19 +342,26 @@ router.put("/transfers", authenticateToken, async (req, res) => {
         ]
       );
 
-      await pool.query("UPDATE transactions SET parent_transaction_id = $1, child_transaction_id = $2 WHERE transaction_id = $3", [
-        parent.rows[0].transaction_id,
-        child.rows[0].transaction_id,
-        parent.rows[0].transaction_id
-      ])
+      // updates transaction receipts ID for sender and receiver
+      await pool.query(
+        "UPDATE transactions SET parent_transaction_id = $1, child_transaction_id = $2 WHERE transaction_id = $3",
+        [
+          parent.rows[0].transaction_id,
+          child.rows[0].transaction_id,
+          parent.rows[0].transaction_id,
+        ]
+      );
 
-      await pool.query("UPDATE transactions SET parent_transaction_id = $1, child_transaction_id = $2 WHERE transaction_id = $3", [
-        parent.rows[0].transaction_id,
-        child.rows[0].transaction_id,
-        child.rows[0].transaction_id
-      ])
+      await pool.query(
+        "UPDATE transactions SET parent_transaction_id = $1, child_transaction_id = $2 WHERE transaction_id = $3",
+        [
+          parent.rows[0].transaction_id,
+          child.rows[0].transaction_id,
+          child.rows[0].transaction_id,
+        ]
+      );
 
-
+      // response
       return res
         .status(200)
         .json({ receiver: receiverAcc.rows[0].account_name });
@@ -337,7 +371,9 @@ router.put("/transfers", authenticateToken, async (req, res) => {
   }
 });
 
-// Pin reset
+/* Pin reset section */
+
+// sends confirmation code to customer's email
 router.post("/codecheck1", authenticateToken, async (req, res) => {
   try {
     const userId = req.user;
@@ -410,6 +446,8 @@ router.post("/codecheck1", authenticateToken, async (req, res) => {
     return res.status(411).json({ error: error.message });
   }
 });
+
+// checks confirmation code
 router.post("/codechecka1", authenticateToken, async (req, res) => {
   try {
     const userId = req.user;
@@ -439,6 +477,7 @@ router.post("/codechecka1", authenticateToken, async (req, res) => {
       [email]
     );
 
+    // checks for valid verification code
     if (customerInLimbo.rows === 0)
       return res.status(400).json({ error: "Verification code non-existent!" });
 
@@ -447,17 +486,20 @@ router.post("/codechecka1", authenticateToken, async (req, res) => {
         .status(402)
         .json({ error: "expired or invalid verification code!" });
 
+    // deletes verification code after complete verification
     const deleteVerificationCode = await pool.query(
       "DELETE FROM limbo WHERE customer_email = $1",
       [email]
     );
 
+    // response
     return res.status(200).json("good");
   } catch (error) {
     return res.status(401).json({ error: error.message });
   }
 });
 
+// pin rester API
 router.put("/resetpass1", authenticateToken, async (req, res) => {
   try {
     const userId = req.user;
@@ -476,28 +518,34 @@ router.put("/resetpass1", authenticateToken, async (req, res) => {
     if (account.rows.length === 0)
       return res.status(401).json({ error: "Account is non-existent!" });
 
+    // incase someone tries using tools like postman to make the API call
     if (account.rows[0].customer_id !== userId)
       return res.status(403).json({ error: "You don not own this account!" });
 
     const email = customer.rows[0].customer_email;
 
+    // hashes pin
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // updates pin
     const pWordUpdate = await pool.query(
       "UPDATE accounts SET account_4digitpin = $1 WHERE customer_id = $2",
       [hashedPassword, userId]
     );
 
+    // deletes verification code incase it wasn't successfully deleted in previous API
     const deleteVerificationCode = await pool.query(
       "DELETE FROM limbo WHERE customer_email = $1",
       [email]
     );
 
+    // response
     return res.status(200).json("Password updated!");
   } catch (error) {
     return res.status(401).json({ error: error.message });
   }
 });
+/* pin reset section ends */
 
 //Exports users-routes.js
 module.exports = router;

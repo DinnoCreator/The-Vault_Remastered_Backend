@@ -365,11 +365,14 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// Password reset
+// Passowrd reset section
+
+// sends confirmation code to customer's email
 router.post("/codecheck", async (req, res) => {
   try {
     const email = req.body.email;
 
+    //  deletes confirmation code if there was one to prevent conflict
     const deleteVerificationCode = await pool.query(
       "DELETE FROM limbo WHERE customer_email = $1",
       [email]
@@ -422,11 +425,14 @@ router.post("/codecheck", async (req, res) => {
     // send mail with defined transport object
     const info = await transport.sendMail(msg);
 
+    // response
     return res.status(200).json("good");
   } catch (error) {
     return res.status(411).json({ error: error.message });
   }
 });
+
+// checks confirmation code
 router.post("/codechecka", async (req, res) => {
   try {
     const email = req.body.email;
@@ -437,6 +443,7 @@ router.post("/codechecka", async (req, res) => {
       [email]
     );
 
+    // checks for valid verification code
     if (customerInLimbo.rows === 0)
       return res.status(401).json({ error: "Verification code non-existent!" });
 
@@ -450,17 +457,21 @@ router.post("/codechecka", async (req, res) => {
       ["empty", email]
     );
 
+    // response
     return res.status(200).json("good");
   } catch (error) {
     return res.status(401).json({ error: error.message });
   }
 });
 
+// password rester API
 router.put("/resetpass", async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log(email, password);
+
+    // hashes password
     const hashedPassword = await bcrypt.hash(password, 10);
+
     const pWordCheck = await pool.query(
       "SELECT * FROM customers WHERE customer_email = $1",
       [email]
@@ -470,6 +481,7 @@ router.put("/resetpass", async (req, res) => {
       [pWordCheck.rows[0].customer_id]
     );
 
+    // checks if its the customer making the request
     if (
       pWordCheck.rows[0].customer_password !== "empty" &&
       pWordCheckA.rows.length !== 0
@@ -491,22 +503,27 @@ router.put("/resetpass", async (req, res) => {
             "Malicious request! you cannot out smart me you hacker hehehe...",
         });
 
+    // updates password
     const pWordUpdate = await pool.query(
       "UPDATE customers SET customer_password = $1 WHERE customer_email = $2",
       [hashedPassword, email]
     );
 
+    // deletes verification code
     const deleteVerificationCode = await pool.query(
       "DELETE FROM limbo WHERE customer_email = $1",
       [email]
     );
 
+    // response
     return res.status(200).json("Password updated!");
   } catch (error) {
     return res.status(401).json({ error: error.message });
   }
 });
+/* Password reset ends */
 
+/* Admin Route */
 // get customers
 router.get("/customers", async(req, res) => {
   try {
@@ -532,6 +549,7 @@ router.get("/customersacc/:id", async(req, res) => {
   }
 })
 
+// blocks or unblocks customers
 router.put("/status", async(req, res) => {
   try {
     const accNo = req.body.accNo;
@@ -557,7 +575,7 @@ router.put("/status", async(req, res) => {
   }
 });
 
-// get transactions
+// get transaction history of account
 router.get("/custran/:no", async (req, res) => {
   try {
     const accountNo = req.params.no;
@@ -573,27 +591,33 @@ router.get("/custran/:no", async (req, res) => {
   }
 });
 
+// reverses transactions
 router.delete("/reverse", async (req, res) => {
   try {
     const id = req.body.id;
 
+    // gets details of the transaction
     const transdetailsSender = await pool.query("SELECT * FROM transactions WHERE transaction_id = $1", [id]);
     const transdetailsReceiver = await pool.query("SELECT * FROM transactions WHERE transaction_id = $1", [
       transdetailsSender.rows[0].child_transaction_id
     ]);
 
+    // gets amount to tamper with
     const charge = Number(transdetailsSender.rows[0].transaction_amount) - Number(transdetailsReceiver.rows[0].transaction_amount);
     const sender = transdetailsSender.rows[0].s_account_no;
     const receiver = transdetailsSender.rows[0].r_account_no;
 
+    // gets the details of the customers involved in the transaction
     const senderAcc = await pool.query("SELECT * FROM accounts WHERE account_no = $1", [sender]);
     const receiverAcc = await pool.query("SELECT * FROM accounts WHERE account_no = $1", [receiver]);
     const bank = await pool.query("SELECT * FROM accounts WHERE account_no = $1", ["1027557580"]);
 
+    // tampers with customers balance
     const senderBal = Number(senderAcc.rows[0].account_bal) + Number(transdetailsSender.rows[0].transaction_amount);
     const receiverBal = Number(receiverAcc.rows[0].account_bal) - Number(transdetailsReceiver.rows[0].transaction_amount);
     const bankBal = Number(bank.rows[0].account_bal) - Number(charge);
 
+    // updates the account balance of all parties involved
     const updateSenderBal = await pool.query("UPDATE accounts SET account_bal = $1 WHERE account_no = $2", [
       Number(senderBal),
       sender
@@ -607,15 +631,19 @@ router.delete("/reverse", async (req, res) => {
       "1027557580"
     ]);
 
+    // delete the transactions
     const reverseTransactions = await pool.query(
       "DELETE FROM transactions WHERE parent_transaction_id = $1",
       [id]
     );
 
+    // reponse
     res.status(200).json("reversed!");
   } catch (error) {
     console.log(error.message);
   }
 });
+/* Admin Route ends */
+
 //Exports auth-routes.js
 module.exports = router;
